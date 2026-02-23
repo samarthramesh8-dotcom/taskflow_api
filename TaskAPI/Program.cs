@@ -1,41 +1,83 @@
+using Microsoft.AspNetCore.Authentication.JwtBearer;
+using Microsoft.AspNetCore.Authorization;
+using Microsoft.IdentityModel.Tokens;
+using System.Text;
+
 var builder = WebApplication.CreateBuilder(args);
 
-// Add services to the container.
-// Learn more about configuring OpenAPI at https://aka.ms/aspnet/openapi
 builder.Services.AddOpenApi();
+
+// JWT (dev setup)
+var jwtSecret = builder.Configuration["JWT_SECRET"] ?? "dev_only_change_me_please_32_chars_min";
+var key = new SymmetricSecurityKey(Encoding.UTF8.GetBytes(jwtSecret));
+
+builder.Services
+    .AddAuthentication(JwtBearerDefaults.AuthenticationScheme)
+    .AddJwtBearer(o =>
+    {
+        o.TokenValidationParameters = new TokenValidationParameters
+        {
+            ValidateIssuer = false,
+            ValidateAudience = false,
+            ValidateIssuerSigningKey = true,
+            IssuerSigningKey = key,
+            ValidateLifetime = true
+        };
+    });
+
+builder.Services.AddAuthorization();
 
 var app = builder.Build();
 
-// Configure the HTTP request pipeline.
 if (app.Environment.IsDevelopment())
 {
     app.MapOpenApi();
 }
 
-app.UseHttpsRedirection();
+app.UseAuthentication();
+app.UseAuthorization();
 
-var summaries = new[]
+// ---- AUTH ----
+app.MapPost("/api/auth/login", (LoginRequest req) =>
 {
-    "Freezing", "Bracing", "Chilly", "Cool", "Mild", "Warm", "Balmy", "Hot", "Sweltering", "Scorching"
-};
+    // TODO: replace with real user check
+    if (req.Email != "test1@example.com" || req.Password != "Password123!")
+        return Results.Unauthorized();
 
-app.MapGet("/weatherforecast", () =>
+    var token = Jwt.MakeToken(jwtSecret);
+    return Results.Ok(new { token });
+});
+
+// ---- TASKS ----
+app.MapPost("/tasks", [Authorize] (CreateTaskRequest req) =>
+{
+    // TODO: replace with DB insert
+    return Results.Created($"/tasks/{Guid.NewGuid()}", new
     {
-        var forecast = Enumerable.Range(1, 5).Select(index =>
-                new WeatherForecast
-                (
-                    DateOnly.FromDateTime(DateTime.Now.AddDays(index)),
-                    Random.Shared.Next(-20, 55),
-                    summaries[Random.Shared.Next(summaries.Length)]
-                ))
-            .ToArray();
-        return forecast;
-    })
-    .WithName("GetWeatherForecast");
+        id = Guid.NewGuid(),
+        text = req.Text,
+        done = false
+    });
+});
 
 app.Run();
 
-record WeatherForecast(DateOnly Date, int TemperatureC, string? Summary)
+record LoginRequest(string Email, string Password);
+record CreateTaskRequest(string Text);
+
+static class Jwt
 {
-    public int TemperatureF => 32 + (int)(TemperatureC / 0.5556);
+    public static string MakeToken(string secret)
+    {
+        var key = new SymmetricSecurityKey(Encoding.UTF8.GetBytes(secret));
+        var creds = new SigningCredentials(key, SecurityAlgorithms.HmacSha256);
+
+        var token = new System.IdentityModel.Tokens.Jwt.JwtSecurityToken(
+            claims: [],
+            expires: DateTime.UtcNow.AddHours(6),
+            signingCredentials: creds
+        );
+
+        return new System.IdentityModel.Tokens.Jwt.JwtSecurityTokenHandler().WriteToken(token);
+    }
 }
